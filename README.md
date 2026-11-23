@@ -1,6 +1,6 @@
 # arch
 
-my archlinux template
+my archlinux template, perform `curl -fLO https://raw.githubusercontent.com/adhd0/arch/main/archws.sh` and run `bash archws.sh install`
 
 install script for my desktop (ryzen cpu, rtx 50xx, qhd display).
 
