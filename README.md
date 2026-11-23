@@ -1,91 +1,25 @@
 # arch
 
-my archlinux template, perform `curl -fLO https://raw.githubusercontent.com/adhd0/arch/main/archws.sh` and run `bash archws.sh install`
+my archlinux template, perform `curl -fLO https://raw.githubusercontent.com/adhd0/arch/main/archws.sh` and run `bash archws.sh install` if u want it
 
 install script for my desktop (ryzen cpu, rtx 50xx, qhd display).
 
-this is my personal setup, made for this one machine
+it installs an encrypted (luks2) btrfs system with grub, linux-zen + linux-lts, nvidia-open drivers,
+plasma on wayland with pipewire and firewalld, zram, automatic snapshots (snapper, snap-pac, grub-btrfs),
+docker/podman/k3s, dev toolchains, mpv, prism launcher for minecraft and a few flatpak apps.
 
-## stack
+tuned for responsiveness: zram with matching vm sysctls (zswap off), systemd-oomd, trim and dm-crypt
+workqueue bypass on nvme, btrfs with noatime and zstd.
 
-- grub, luks2, btrfs, zram, linux-zen, linux-lts, nvidia-open-dkms
-- plasma (wayland), pipewire, firewalld
-- snapper, snap-pac, grub-btrfs
+## tl;dr
 
-## install
+​```
+bash archws.sh install             # from the arch iso; asks questions, then installs
+bash archws.sh install --resume    # continue after a failure
+archws post                        # after the first boot: flatpak apps, devtools, etc
+archws verify                      # check the installed system
+sudo archws rollback               # go back to a snapshot
+​```
 
-from the arch iso, uefi:
-
-```
-bash archws.sh install --dry-run
-bash archws.sh install
-```
-
-the script must not be under `/mnt`.
-
-resume after a failure:
-
-```
-bash archws.sh install --resume
-```
-
-reuse saved answers (`/var/lib/archws/answers.conf`):
-
-```
-bash archws.sh install --config answers.conf
-```
-
-after the first boot:
-
-```
-archws post
-archws verify
-```
-
-## mullvad
-
-asked first. the script downloads the 2026.5 `.deb` from github, checks the signature, starts
-the daemon with lockdown mode on and connects before installing anything.
-
-to skip the github download, put `MullvadVPN-2026.5_amd64.deb` and `.asc` next to the script.
-
-on the installed system there is no network until `archws post` logs in.
-
-## rollback
-
-```
-sudo archws rollback --list
-sudo archws rollback
-reboot
-sudo archws rollback --finish
-sudo archws rollback --cleanup
-```
-
-without the script:
-
-```
-mount -o subvolid=5 /dev/mapper/cryptroot /mnt
-mv /mnt/@ /mnt/@.broken
-btrfs subvolume snapshot /mnt/@snapshots/<N>/snapshot /mnt/@
-rsync -a -c --delete /mnt/@/.bootbackup/ /boot/
-rm -f /mnt/@/var/lib/pacman/db.lck
-umount /mnt && reboot
-```
-
-## disk
-
-```
-p1  2g    esp, /boot
-p2  rest  luks2, btrfs
-
-@            /
-@home        /home
-@snapshots   /.snapshots
-@log         /var/log
-@pkg         /var/cache/pacman/pkg
-@docker      /var/lib/docker
-@containers  /var/lib/containers
-@rancher     /var/lib/rancher
-```
-
+the first question is whether to route everything through mullvad.
 `/boot` is not encrypted. snapshots do not include `/home`.
