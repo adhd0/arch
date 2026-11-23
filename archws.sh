@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="2026.11.23-6"
+VERSION="2026.11.23-8"
 T=/mnt
 DRY=0
 RESUME=0
@@ -184,10 +184,10 @@ PK_BASE=(base base-devel linux-zen linux-zen-headers linux-lts linux-lts-headers
 PK_NVIDIA=(nvidia-open-dkms nvidia-utils lib32-nvidia-utils libva-nvidia-driver)
 PK_DESKTOP=(plasma-meta konsole dolphin dolphin-plugins kate ark gwenview okular kcalc
   partitionmanager filelight kwalletmanager ffmpegthumbs kdegraphics-thumbnailers kio-admin
-  xdg-desktop-portal-gtk xdg-user-dirs xsettingsd xorg-xwayland xorg-xlsclients xorg-xrdb firefox
+  xdg-desktop-portal-gtk xdg-user-dirs xorg-xwayland xorg-xlsclients xorg-xrdb firefox
   pipewire pipewire-alsa pipewire-pulse pipewire-jack wireplumber lib32-pipewire)
 PK_SYSTEM=(firewalld power-profiles-daemon fwupd smartmontools nvme-cli lm_sensors usbutils pciutils
-  flatpak pacman-contrib pkgfile openssh jq 7zip unzip zip unrar exfatprogs ntfs-3g libva-utils vulkan-tools
+  flatpak pacman-contrib pkgfile kernel-modules-hook openssh jq 7zip unzip zip unrar exfatprogs ntfs-3g libva-utils vulkan-tools
   wireguard-tools networkmanager-openvpn hunspell-en_us hunspell-ru
   wl-clipboard bash-completion zsh-completions zsh-autosuggestions zsh-syntax-highlighting
   htop btop fastfetch ripgrep fd fzf bat eza zoxide tree wget)
@@ -199,7 +199,7 @@ PK_MEDIA=(mpv yt-dlp ffmpeg gst-plugins-good gst-plugins-bad gst-plugins-ugly gs
   gst-plugin-pipewire libdvdcss libheif libavif libjxl)
 PK_PRISM=(prismlauncher)
 PK_BLUETOOTH=(bluez bluez-utils)
-PK_PRINT=(cups cups-pdf system-config-printer avahi nss-mdns)
+PK_PRINT=(cups cups-pdf avahi nss-mdns)
 PK_VM_GUEST=(qemu-guest-agent spice-vdagent)
 PK_DEV=(gcc clang llvm lld lldb gdb cmake ninja meson ccache mold bear valgrind strace perf
   git-lfs github-cli git-delta go gopls delve rustup python python-pipx uv ruff pyright
@@ -212,9 +212,9 @@ FLATPAK_APPS=(
   "com.discordapp.Discord|Discord|Y|verified publisher"
   "org.keepassxc.KeePassXC|KeePassXC (password manager)|Y|verified publisher"
   "app.zen_browser.zen|Zen Browser (second browser)|Y|verified publisher"
+  "com.brave.Browser|Brave|Y|verified publisher"
   "com.termius.Termius|Termius (SSH client)|Y|community build, not vendor-verified"
   "com.visualstudio.code|Microsoft build of VS Code (only for Marketplace-only extensions)|N|community build, not vendor-verified"
-  "it.mijorus.gearlever|Gear Lever (adds AppImages such as Cursor to the app menu)|N|verified publisher"
 )
 
 SUBVOLS=(@ @home @snapshots @log @pkg @docker @containers @rancher)
@@ -845,6 +845,19 @@ unset f
 (( $+commands[direnv] )) && eval "$(direnv hook zsh)"
 EOF
 
+  put /etc/skel/.config/code-flags.conf 644 <<'EOF'
+--enable-features=AllowQt
+--password-store=kwallet6
+EOF
+  put "/etc/skel/.config/Code - OSS/User/settings.json" 644 <<'EOF'
+{
+  "window.titleBarStyle": "native",
+  "editor.fontFamily": "'JetBrains Mono', monospace",
+  "editor.fontLigatures": true,
+  "terminal.integrated.fontFamily": "'JetBrainsMono Nerd Font', monospace"
+}
+EOF
+
   step "Accounts"
   if ((DRY)) || ! arch-chroot "$T" id "$USER_NAME" >/dev/null 2>&1; then
     in_chroot useradd -m -G wheel -s /usr/bin/zsh "$USER_NAME"
@@ -893,6 +906,14 @@ fs.inotify.max_user_watches = 524288
 EOF
   put /etc/makepkg.conf.d/10-jobs.conf 644 <<'EOF'
 MAKEFLAGS="--jobs=$(nproc)"
+EOF
+  put /etc/sysctl.d/99-writeback.conf 644 <<'EOF'
+vm.dirty_bytes = 268435456
+vm.dirty_background_bytes = 67108864
+EOF
+  put /etc/systemd/journald.conf.d/10-size.conf 644 <<'EOF'
+[Journal]
+SystemMaxUse=500M
 EOF
   if ((WANT_OOMD)); then
     put /etc/systemd/system/user@.service.d/10-oomd.conf 644 <<'EOF'
@@ -945,6 +966,16 @@ do_software() {
     in_chroot firewall-offline-cmd --zone=public --add-service=mdns
   fi
 
+  put /etc/firefox/policies/policies.json 644 <<'EOF'
+{
+  "policies": {
+    "Preferences": {
+      "widget.use-xdg-desktop-portal.file-picker": { "Value": 1, "Status": "default" }
+    }
+  }
+}
+EOF
+
   step "Fonts and font rendering"
   pac "${PK_FONTS[@]}"
   in_chroot ln -sf /usr/share/fontconfig/conf.avail/10-sub-pixel-rgb.conf /etc/fonts/conf.d/
@@ -976,6 +1007,12 @@ EOF
   if ((WANT_CONTAINERS)); then
     step "Docker, Podman, Kubernetes CLI"
     pac "${PK_CONTAINERS[@]}"
+    put /etc/docker/daemon.json 644 <<'EOF'
+{
+  "log-driver": "local",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+EOF
   fi
   if [[ -n $EXTRA_PKGS ]]; then
     step "Extra packages"
@@ -996,6 +1033,7 @@ do_services() {
   step "Enabling services"
   local -a units=(NetworkManager.service systemd-timesyncd.service fstrim.timer plasmalogin.service
     firewalld.service power-profiles-daemon.service paccache.timer pkgfile-update.timer
+    linux-modules-cleanup.service
     "btrfs-scrub@-.timer")
   [[ -n $MIRRORS ]] && units+=(reflector.timer)
   ((WANT_BT)) && units+=(bluetooth.service)
@@ -1158,6 +1196,7 @@ cmd_post() {
     run gsettings set org.gnome.desktop.interface font-hinting slight
   fi
   have xdg-user-dirs-update && run xdg-user-dirs-update
+  if have balooctl6 && ask_yn "Turn off Baloo file indexing?" Y; then run balooctl6 disable; fi
   if have npm; then run npm config set prefix "$HOME/.local"; fi
   if have rustup && ! rustup toolchain list 2>/dev/null | grep -q stable; then
     if ask_yn "Install the stable Rust toolchain with rustup?" Y; then run rustup default stable; fi
@@ -1174,6 +1213,9 @@ cmd_post() {
         retry run sudo flatpak install -y --noninteractive flathub "$id"
       fi
     done
+    run sudo flatpak override --filesystem=xdg-config/kdeglobals:ro --filesystem=xdg-config/fontconfig:ro \
+      --filesystem=xdg-config/gtk-3.0:ro --filesystem=xdg-config/gtk-4.0:ro
+    retry run sudo flatpak install -y --noninteractive flathub org.gtk.Gtk3theme.Breeze//3.22
   fi
 
   step "Cursor (vendor AppImage; not in Arch repos, not on Flathub)"
@@ -1190,7 +1232,22 @@ cmd_post() {
         run mkdir -p "$HOME/Applications"
         run curl -fL --output-dir "$HOME/Applications" -O "$url"
         run chmod +x "$HOME/Applications/${url##*/}"
-        info "Start it with: ~/Applications/${url##*/}"
+        run ln -sfn "$HOME/Applications/${url##*/}" "$HOME/Applications/Cursor.AppImage"
+        run mkdir -p "$HOME/.local/share/applications"
+        if ! ((DRY)); then
+          find "$HOME/Applications" -maxdepth 1 -name 'Cursor-*-x86_64.AppImage' ! -name "${url##*/}" -delete
+          cat > "$HOME/.local/share/applications/cursor.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Cursor
+Exec=$HOME/Applications/Cursor.AppImage %F
+Icon=applications-development
+Categories=Development;IDE;
+StartupWMClass=Cursor
+Terminal=false
+EOF
+        fi
+        info "Cursor is in the app menu; the file is ~/Applications/Cursor.AppImage."
         info "If it complains about libfuse.so.2: sudo pacman -S --needed fuse2"
         ;;
       *) warn "Unexpected download host; not fetching. Get it from cursor.com manually." ;;
@@ -1461,6 +1518,9 @@ cmd_verify() {
   fi
   t "interface language is English only"        'grep -qx "LANG=en_US.UTF-8" /etc/locale.conf && [[ $(locale -a | grep -c "_.*utf8") -eq 1 ]]'
   w "layouts + Ctrl+Shift switch (system default)" 'grep -q "^LayoutList=.*,." /etc/xdg/kxkbrc && grep -q "grp:ctrl_shift_toggle" /etc/xdg/kxkbrc'
+  if have flatpak && [[ -r /sys/module/nvidia/version ]]; then
+    w "Flatpak has the NVIDIA runtime for this driver" 'flatpak list --runtime --columns=application | grep -qx "org.freedesktop.Platform.GL.nvidia-$(tr . - < /sys/module/nvidia/version)"'
+  fi
   w "Wayland session (run inside Plasma)"       '[[ ${XDG_SESSION_TYPE:-} == wayland ]]'
   t "login manager enabled (plasmalogin)"       'systemctl is-enabled -q plasmalogin.service'
   w "PipeWire serves PulseAudio clients"        'pactl info | grep -q "on PipeWire"'
